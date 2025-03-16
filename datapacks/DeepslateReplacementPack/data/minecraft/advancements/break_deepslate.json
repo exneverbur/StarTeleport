@@ -1,0 +1,20 @@
+{
+  "criteria": {
+    "requirement": {
+      "trigger": "minecraft:item_used_on_block",
+      "conditions": {
+        "location": {
+          "block": {
+            "blocks": ["minecraft:deepslate"]
+          }
+        },
+        "item": {
+          "items": ["minecraft:stone_pickaxe","minecraft:iron_pickaxe","minecraft:diamond_pickaxe"]
+        }
+      }
+    }
+  },
+  "rewards": {
+    "function": "deepslate_replacement:monitor_player"
+  }
+}

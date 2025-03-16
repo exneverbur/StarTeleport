@@ -1,6 +1,0 @@
-name: DeepslateReplacementPlugin
-version: 1.0-SNAPSHOT
-main: com.xinglingqaq.DeepslateReplacementPlugin
-description: 自动替换基岩为深板岩的洞穴适配插件
-author: XingLingQAQ
-api-version: 1.20
