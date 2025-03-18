@@ -10,9 +10,14 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import java.util.HashMap;
+import java.util.Map;
 
 public class CaveTeleport extends JavaPlugin implements Listener, CommandExecutor {
     private boolean debug;
+    private int teleportDelay;
+    private final Map<Player, Integer> taskMap = new HashMap<>();
+    private final Map<Player, Boolean> playerStatusMap = new HashMap<>();
     
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
@@ -26,6 +31,7 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
         if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
             reloadConfig();
             debug = getConfig().getBoolean("debug", false);
+        teleportDelay = getConfig().getInt("delay_seconds", 5);
             sender.sendMessage("§a配置已成功重载！");
             return true;
         }
@@ -36,6 +42,7 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
     public void onEnable() {
         saveDefaultConfig();
         debug = getConfig().getBoolean("debug", false);
+        teleportDelay = getConfig().getInt("delay_seconds", 5);
         getServer().getPluginManager().registerEvents(this, this);
         getCommand("ctp").setExecutor(this);
         getLogger().info("[XingLingQAQ&AI]洞穴适配——已成功启动！");
@@ -54,7 +61,22 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
         if (!player.hasPermission("caveteleport.pass")) {
             return;
         }
-        
+
+        // 检测三维坐标变化
+        if (event.getFrom().getBlockX() == event.getTo().getBlockX() &&
+            event.getFrom().getBlockY() == event.getTo().getBlockY() &&
+            event.getFrom().getBlockZ() == event.getTo().getBlockZ()) {
+            return;
+        }
+
+        // 取消现有任务并发送提示
+        if (taskMap.containsKey(player)) {
+            getServer().getScheduler().cancelTask(taskMap.get(player));
+            taskMap.remove(player);
+            player.sendTitle("§c传送取消!", "", 10, 20, 10);
+            return;
+        }
+
         World currentWorld = player.getWorld();
         String targetWorldName = null;
         
@@ -74,21 +96,58 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
             }
         }
         
-        // 检查Y坐标是否低于等于-62
-        if (player.getLocation().getBlockY() <= -62 && targetWorldName != null) {
+        // 取消现有任务
+        if (taskMap.containsKey(player)) {
+            getServer().getScheduler().cancelTask(taskMap.get(player));
+            taskMap.remove(player);
+            playerStatusMap.put(player, true);
+        }
+        // 更新玩家状态当离开-62层
+        if (player.getLocation().getBlockY() > -62) {
+            playerStatusMap.put(player, true);
+        }
+
+        // 精确层数状态追踪
+        int currentY = player.getLocation().getBlockY();
+        Boolean status = playerStatusMap.get(player);
+        
+        // 仅当首次进入或重新进入深层时触发
+        if (currentY <= -62 && (status == null || status)) {
+            playerStatusMap.put(player, false);
+            
+            if (targetWorldName != null) {
+            World targetWorld = getServer().getWorld(targetWorldName);
+            if (targetWorld == null) {
+                getLogger().warning("目标世界 " + targetWorldName + " 未正确加载！");
+                return;
+            }
+            final World finalTargetWorld = targetWorld;
+            java.util.concurrent.atomic.AtomicInteger remaining = new java.util.concurrent.atomic.AtomicInteger(teleportDelay);
+            
+            int taskId = getServer().getScheduler().scheduleSyncRepeatingTask(this, () -> {
+                int current = remaining.getAndDecrement();
+                if (current > 0) {
+                    player.sendTitle("§e即将传送", "剩余 " + current + " 秒", 0, 20, 0);
+                } else {
+                    player.sendTitle("§e即将传送", "剩余 0 秒", 0, 20, 0);
+                    getServer().getScheduler().scheduleSyncDelayedTask(this, () -> {
+                        getServer().getScheduler().cancelTask(taskMap.get(player));
+                        taskMap.remove(player);
+                        player.teleport(finalTargetWorld.getSpawnLocation());
+                        playerStatusMap.put(player, true);
+                        player.sendMessage("§a传送完成！");
+                        // 重置层数状态标记
+                        playerStatusMap.remove(player);
+                    }, 20L);
+                }
+            }, 0L, 20L);
+            
+            taskMap.put(player, taskId);
             // 调试：记录匹配到的传送规则
             if (debug) {
                 getLogger().info("[调试] 触发传送条件，目标世界：" + targetWorldName);
             }
-            
-            World targetWorld = getServer().getWorld(targetWorldName);
-            if (targetWorld != null) {
-                player.teleport(targetWorld.getSpawnLocation());
-                player.sendMessage("你已到达地底，正在传送...");
-            } else {
-                // 调试：记录世界加载失败错误
-                getLogger().warning("[错误] 目标世界 " + targetWorldName + " 未正确加载！");
-            }
-        }
-    }
+          }
+      }
+   }
 }
