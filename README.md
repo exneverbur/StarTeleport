@@ -1,4 +1,4 @@
-###StarTeleport  
+### StarTeleport  
 
 描述：一个简单的插件,在玩家到达一定高度后将玩家传送到某个世界
 
