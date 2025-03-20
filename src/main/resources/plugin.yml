@@ -1,19 +1,19 @@
-name: CaveTeleport
-version: 1.1
-main: com.xinglingqaq.CaveTeleport
+name: StarTeleport
+version: 1.2
+main: com.xinglingqaq.StarTeleport
 
 permissions:
-  caveteleport.pass:
+  starteleport.pass:
     description: 允许玩家触发洞穴传送
     default: op
-  caveteleport.reload:
+  starteleport.command.reload:
     description: 允许重载插件配置
     default: op
 
 commands:
-  ctp:
+  stp:
     description: 重载插件配置
-    usage: /ctp reload
-    permission: caveteleport.reload
+    usage: /stp reload
+    permission: starteleport.command.reload
 
 api-version: 1.16

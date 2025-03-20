@@ -13,7 +13,7 @@ import org.bukkit.command.CommandSender;
 import java.util.HashMap;
 import java.util.Map;
 
-public class CaveTeleport extends JavaPlugin implements Listener, CommandExecutor {
+public class StarTeleport extends JavaPlugin implements Listener, CommandExecutor {
     private boolean debug;
     private int teleportDelay;
     private final Map<Player, Integer> taskMap = new HashMap<>();
@@ -21,9 +21,9 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
     
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-        if (!cmd.getName().equalsIgnoreCase("ctp")) return false;
+        if (!cmd.getName().equalsIgnoreCase("stp")) return false;
         
-        if (!sender.hasPermission("caveteleport.reload")) {
+        if (!sender.hasPermission("starteleport.command.reload")) {
             sender.sendMessage("§c你没有权限执行此命令！");
             return true;
         }
@@ -31,7 +31,7 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
         if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
             reloadConfig();
             debug = getConfig().getBoolean("debug", false);
-        teleportDelay = getConfig().getInt("delay_seconds", 5);
+            teleportDelay = getConfig().getInt("delay_seconds", 5);
             sender.sendMessage("§a配置已成功重载！");
             return true;
         }
@@ -44,13 +44,13 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
         debug = getConfig().getBoolean("debug", false);
         teleportDelay = getConfig().getInt("delay_seconds", 5);
         getServer().getPluginManager().registerEvents(this, this);
-        getCommand("ctp").setExecutor(this);
-        getLogger().info("[XingLingQAQ&AI]洞穴适配——已成功启动！");
+        getCommand("stp").setExecutor(this);
+        getLogger().info("[XingLingQAQ]StarTeleport——已成功启动！");
     }
 
     @Override
     public void onDisable() {
-        getLogger().info("[XingLingQAQ&AI]洞穴适配——已成功卸载！");
+        getLogger().info("[XingLingQAQ]StarTeleport——已成功卸载！");
     }
     
     @EventHandler
@@ -58,7 +58,7 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
         Player player = event.getPlayer();
         
         // 新增权限检查
-        if (!player.hasPermission("caveteleport.pass")) {
+        if (!player.hasPermission("starteleport.pass")) {
             return;
         }
 
@@ -86,11 +86,15 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
         }
         
         ConfigurationSection rules = getConfig().getConfigurationSection("worlds");
+        int worldThresholdY = getConfig().getInt("threshold_y", -62); // 默认阈值
+        
         if (rules != null) {
             for (String key : rules.getKeys(false)) {
                 ConfigurationSection rule = rules.getConfigurationSection(key);
                 if (currentWorld.getName().equals(rule.getString("world_from"))) {
                     targetWorldName = rule.getString("world_to");
+                    // 从世界配置中获取阈值，如果没有则使用默认值
+                    worldThresholdY = rule.getInt("threshold_y", worldThresholdY);
                     break;
                 }
             }
@@ -102,17 +106,18 @@ public class CaveTeleport extends JavaPlugin implements Listener, CommandExecuto
             taskMap.remove(player);
             playerStatusMap.put(player, true);
         }
-        // 更新玩家状态当离开-62层
-        if (player.getLocation().getBlockY() > -62) {
+        // 更新玩家状态当离开阈值区域
+        int currentY = player.getLocation().getBlockY();
+        if ((worldThresholdY < 0 && currentY > worldThresholdY) || (worldThresholdY > 0 && currentY < worldThresholdY)) {
             playerStatusMap.put(player, true);
         }
 
         // 精确层数状态追踪
-        int currentY = player.getLocation().getBlockY();
         Boolean status = playerStatusMap.get(player);
         
-        // 仅当首次进入或重新进入深层时触发
-        if (currentY <= -62 && (status == null || status)) {
+        // 根据阈值正负值动态调整触发条件
+        boolean triggerCondition = (worldThresholdY < 0) ? (currentY <= worldThresholdY) : (currentY >= worldThresholdY);
+        if (triggerCondition && (status == null || status)) {
             playerStatusMap.put(player, false);
             
             if (targetWorldName != null) {

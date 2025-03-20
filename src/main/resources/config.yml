@@ -1,12 +1,19 @@
 debug: false
 # 新增传送延迟配置
 delay_seconds: 5
+# Y轴阈值配置（负数表示低于该值触发，正数表示高于该值触发）
+# 此值作为默认值，当世界配置中没有指定threshold_y时使用
+threshold_y: -62
 # 世界映射配置
 worlds:
   tp1:
     world_from: world
     world_to: cave
+    # 此世界的Y轴阈值，负数表示低于该值触发，正数表示高于该值触发
+    threshold_y: -64
   tp2:
     world_from: nether
     world_to: target_nether
+    # 此世界的Y轴阈值，可以与其他世界不同
+    threshold_y: -30
 # 可继续添加更多传送规则
