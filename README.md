@@ -11,7 +11,7 @@ This plugin teleports players to a specific world when they reach a designated a
 ---
 
 **Command System**
-`stp reload` - Reload plugin configuration file
+* `stp reload` - Reload plugin configuration file
 
 ---
 
