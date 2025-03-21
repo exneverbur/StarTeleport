@@ -1,3 +1,5 @@
+[**简体中文 - CN**] | [[**English - EN**](README.md)]
+
 ### StarTeleport - 星之传送
 
 **插件描述**
