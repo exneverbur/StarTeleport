@@ -3,9 +3,6 @@ version: 1.3
 main: com.xinglingqaq.StarTeleport
 
 permissions:
-  starteleport.pass:
-    description: 允许玩家触发传送
-    default: op
   starteleport.command.reload:
     description: 允许重载插件配置
     default: op

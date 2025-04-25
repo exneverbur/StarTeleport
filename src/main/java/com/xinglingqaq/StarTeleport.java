@@ -6,12 +6,12 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.scheduler.BukkitTask;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,16 +21,15 @@ public class StarTeleport extends JavaPlugin implements Listener, CommandExecuto
     private int teleportDelay;
     // 使用 ConcurrentHashMap 来避免并发问题
     private final Map<Player, BukkitTask> taskMap = new ConcurrentHashMap<>();
-    // 记录玩家是否可以触发传送（用于控制重复触发）
-    private final Map<Player, Boolean> canTriggerMap = new ConcurrentHashMap<>();
-    // 记录玩家开始传送时的位置
-    private final Map<Player, org.bukkit.Location> originalLocations = new ConcurrentHashMap<>();
+    private final Map<String, TeleportRule> teleportRules = new ConcurrentHashMap<>();
+    private final Map<Player, Long> lastProcessedTime = new ConcurrentHashMap<>();
     
     // 配置键常量
     private static final String CONFIG_DEBUG = "debug";
     private static final String CONFIG_DELAY = "delay_seconds";
     private static final String CONFIG_THRESHOLD = "threshold_y";
     private static final String CONFIG_WORLDS = "worlds";
+
     
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
@@ -66,8 +65,7 @@ public class StarTeleport extends JavaPlugin implements Listener, CommandExecuto
         // 取消所有待处理的传送任务
         taskMap.values().forEach(BukkitTask::cancel);
         taskMap.clear();
-        canTriggerMap.clear();
-        originalLocations.clear();
+        teleportRules.clear();
         getLogger().info("[XingLingQAQ]StarTeleport——已成功卸载！");
     }
     
@@ -85,6 +83,22 @@ public class StarTeleport extends JavaPlugin implements Listener, CommandExecuto
     private void loadConfig() {
         debug = getConfig().getBoolean(CONFIG_DEBUG, false);
         teleportDelay = getConfig().getInt(CONFIG_DELAY, 5);
+
+        // 读取世界传送配置
+        teleportRules.clear();
+        ConfigurationSection rules = getConfig().getConfigurationSection(CONFIG_WORLDS);
+        if (rules != null) {
+            for (String key : rules.getKeys(false)) {
+                ConfigurationSection rule = rules.getConfigurationSection(key);
+                if (rule != null) {
+                    teleportRules.put(
+                            rule.getString("world_from"),
+                            new TeleportRule(rule.getString("world_to"),
+                                    rule.getInt(CONFIG_THRESHOLD, -62),
+                                    rule.getBoolean("above", false)));
+                }
+            }
+        }
         if (debug) {
             getLogger().info("Debug 模式已启用");
             getLogger().info("传送延迟设置为: " + teleportDelay + "秒");
@@ -94,77 +108,58 @@ public class StarTeleport extends JavaPlugin implements Listener, CommandExecuto
     @EventHandler
     public void onPlayerMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
-        
-        if (!player.hasPermission("starteleport.pass")) {
+
+        if (event.getTo() == null) {
             return;
         }
 
+        // 未配置该世界规则 返回
+        TeleportRule rule = findTeleportRule(player.getWorld().getName());
+        if (rule == null) {
+            return;
+        }
+
+        // 未进行高度变化 返回 只检测方块移动 降低性能损耗
+        if (event.getFrom().getBlockY() == event.getTo().getBlockY()) {
+            return;
+        }
+
+        long currentTime = System.currentTimeMillis();
+        // 限制处理频率 每 100 毫秒处理一次
+        if (lastProcessedTime.containsKey(player) && currentTime - lastProcessedTime.get(player) < 100) {
+            return;
+        }
+        lastProcessedTime.put(player, currentTime);
+
+        // 检查当前高度是否在阈值范围内
+        boolean shouldTeleport = rule.shouldTeleport(event.getTo().getBlockY());
         // 检查是否在传送倒计时中
         if (taskMap.containsKey(player)) {
-            // 只有当玩家移动了指定格数时才取消传送
-            if (hasMovedFullBlock(event)) {
+            // 只有当玩家移动了指定格数时才取消传送 改为高度不在阈值时取消传送
+            if (!shouldTeleport) {
                 cancelExistingTask(player, true);
                 if (debug) {
-                    getLogger().log(Level.INFO, "[调试] 玩家 {0} 移动超过2格，取消传送", player.getName());
+                    getLogger().log(Level.INFO, "[调试] 玩家离开传送阈值区域，取消传送", player.getName());
                 }
                 return;
             }
             if (debug) {
-                getLogger().log(Level.INFO, "[调试] 玩家 {0} 移动未超过2格，继续传送", player.getName());
+                getLogger().log(Level.INFO, "[调试] 玩家 {0} 还在传送阈值区域，继续传送", player.getName());
             }
             // 如果只是微小移动，继续保持传送状态
             return;
         }
 
-        // 检测三维坐标变化
-        if (!hasPositionChanged(event)) {
+        if (!shouldTeleport) {
             return;
         }
 
-        World currentWorld = player.getWorld();
-        TeleportRule teleportRule = findTeleportRule(currentWorld.getName());
-        
-        if (teleportRule == null) {
-            return;
-        }
+        startTeleport(player, rule);
+    }
 
-        handleTeleport(player, teleportRule, event);
-    }
-    
-    /**
-     * 检查玩家是否移动了指定格数（2格）
-     */
-    private boolean hasMovedFullBlock(PlayerMoveEvent event) {
-        Player player = event.getPlayer();
-        org.bukkit.Location originalLoc = originalLocations.get(player);
-        
-        // 如果没有原始位置记录，说明是新的传送，记录当前位置
-        if (originalLoc == null) {
-            originalLoc = event.getFrom().clone(); // 克隆位置以避免引用问题
-            originalLocations.put(player, originalLoc);
-            return false;
-        }
-        
-        // 使用精确坐标计算移动距离
-        double deltaX = Math.abs(event.getTo().getX() - originalLoc.getX());
-        double deltaZ = Math.abs(event.getTo().getZ() - originalLoc.getZ());
-        
-        if (debug) {
-            getLogger().log(Level.INFO, "[调试] 玩家 {0} 移动距离 - X: {1} 格, Z: {2} 格", 
-                new Object[]{player.getName(), String.format("%.2f", deltaX), String.format("%.2f", deltaZ)});
-        }
-        
-        // 如果任一方向移动超过2格，则取消传送
-        return deltaX >= 2.0 || deltaZ >= 2.0;
-    }
-    
-    /**
-     * 检查玩家位置是否发生变化（包括微小移动）
-     */
-    private boolean hasPositionChanged(PlayerMoveEvent event) {
-        return event.getFrom().getBlockX() != event.getTo().getBlockX() ||
-               event.getFrom().getBlockY() != event.getTo().getBlockY() ||
-               event.getFrom().getBlockZ() != event.getTo().getBlockZ();
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        cancelExistingTask(event.getPlayer(), false);
     }
     
     /**
@@ -179,70 +174,13 @@ public class StarTeleport extends JavaPlugin implements Listener, CommandExecuto
                 player.sendTitle("§c传送取消!", "", 10, 20, 10);
             }
         }
-        // 清除原始位置记录
-        originalLocations.remove(player);
     }
     
     /**
      * 查找适用的传送规则
      */
     private TeleportRule findTeleportRule(String currentWorldName) {
-        ConfigurationSection rules = getConfig().getConfigurationSection(CONFIG_WORLDS);
-        if (rules == null) {
-            return null;
-        }
-
-        for (String key : rules.getKeys(false)) {
-            ConfigurationSection rule = rules.getConfigurationSection(key);
-            if (rule != null && currentWorldName.equals(rule.getString("world_from"))) {
-                return new TeleportRule(
-                    rule.getString("world_to"),
-                    rule.getInt(CONFIG_THRESHOLD, getConfig().getInt(CONFIG_THRESHOLD, -62))
-                );
-            }
-        }
-        
-        return null;
-    }
-    
-    /**
-     * 处理传送逻辑
-     */
-    private void handleTeleport(Player player, TeleportRule rule, PlayerMoveEvent event) {
-        int currentY = event.getTo().getBlockY();
-        int fromY = event.getFrom().getBlockY();
-        boolean isNegativeThreshold = rule.threshold < 0;
-        
-        // 检查是否在阈值位置移动
-        if ((isNegativeThreshold && currentY <= rule.threshold) || 
-            (!isNegativeThreshold && currentY >= rule.threshold)) {
-            
-            // 如果在阈值位置移动，取消传送但不显示Title
-            if (fromY == currentY) {
-                cancelExistingTask(player, false);
-                return;
-            }
-            
-            // 检查是否可以触发传送
-            Boolean canTrigger = canTriggerMap.get(player);
-            if (canTrigger == null || canTrigger) {
-                // 首次触发或允许触发
-                startTeleport(player, rule);
-                canTriggerMap.put(player, false); // 防止重复触发
-            }
-        } else {
-            // 检查是否穿过阈值线（从一侧移动到另一侧）
-            boolean crossedThresholdLine = isNegativeThreshold ? 
-                (fromY <= rule.threshold && currentY > rule.threshold) :  // 负数阈值：从下往上穿过
-                (fromY >= rule.threshold && currentY < rule.threshold);   // 正数阈值：从上往下穿过
-                
-            if (crossedThresholdLine) {
-                canTriggerMap.put(player, true); // 允许再次触发
-                if (debug) {
-                    getLogger().log(Level.INFO, "[调试] 玩家 {0} 穿过阈值线，允许再次触发传送", player.getName());
-                }
-            }
-        }
+        return teleportRules.get(currentWorldName);
     }
     
     /**
@@ -255,9 +193,6 @@ public class StarTeleport extends JavaPlugin implements Listener, CommandExecuto
             return;
         }
 
-        // 记录玩家开始传送时的位置
-        originalLocations.put(player, player.getLocation().clone());
-        
         scheduleTeleport(player, targetWorld);
         
         if (debug) {
@@ -299,9 +234,6 @@ public class StarTeleport extends JavaPlugin implements Listener, CommandExecuto
             task.cancel();
         }
         
-        // 清除原始位置记录
-        originalLocations.remove(player);
-        
         player.teleport(targetWorld.getSpawnLocation());
         player.sendMessage("§a传送完成！");
     }
@@ -312,10 +244,26 @@ public class StarTeleport extends JavaPlugin implements Listener, CommandExecuto
     private static class TeleportRule {
         final String targetWorldName;
         final int threshold;
+        final boolean above;
         
-        TeleportRule(String targetWorldName, int threshold) {
+        TeleportRule(String targetWorldName, int threshold, boolean above) {
             this.targetWorldName = targetWorldName;
             this.threshold = threshold;
+            this.above = above;
+        }
+
+        /**
+         * 判断此高度是否在阈值内
+         */
+        public boolean shouldTeleport(Integer yPosition) {
+            if (yPosition == null) {
+                return false;
+            }
+            if (above) {
+                return yPosition >= threshold;
+            } else {
+                return yPosition <= threshold;
+            }
         }
     }
 }
